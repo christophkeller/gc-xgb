@@ -1,5 +1,7 @@
 # XGBoost emulator for GEOS-Chem
-Example code for developing a machine learning emulator for the GEOS-Chem chemistry model, following the methodology described in Keller and Evans (2019).
+Example code for developing a machine learning emulator for the GEOS-Chem chemistry model, following the methodology described in Keller and Evans (2019). This python script trains a chemistry emulator for a specified species based on a preprocessed set of training data. The test data is available at https://gmao.gsfc.nasa.gov/gmaoftp/geoscf/gc-xgb/svm and will be downloaded automatically if it is missing. Tested with Python 3.6.7 and 3.6.9.
+
+Usage: `python gcxgb.py`
 
 **References:**
 
