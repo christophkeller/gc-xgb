@@ -184,9 +184,9 @@ def run_xgb(args,train,valid,Y_train,Y_valid):
     else: 
         param['nthread'] = args.nthread  
     # train XGBoost 
-    start_time = time.clock()
+    start_time = time.perf_counter()
     bst = xgb.train(param,train,num_round)
-    end_time = time.clock()
+    end_time = time.perf_counter()
     dt = end_time - start_time
     # Prediction 
     P_train = bst.predict(train)
