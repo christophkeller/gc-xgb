@@ -182,6 +182,7 @@ def run_xgb(args,train,valid,Y_train,Y_valid):
     if args.gpu==1:
         param['tree_method'] = 'gpu_hist'
     else: 
+        param['tree_method'] = 'hist'
         param['nthread'] = args.nthread  
     # train XGBoost 
     start_time = time.perf_counter()
