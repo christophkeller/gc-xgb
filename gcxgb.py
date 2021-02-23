@@ -21,13 +21,19 @@ from datetime import timedelta
 import xgboost as xgb
 import pandas as pd
 import requests
+import logging
 
 #parameter
 SVMPATH = 'example/svm'
 SVMURL = 'https://gmao.gsfc.nasa.gov/gmaoftp/geoscf/gc-xgb/svm'
 
 def main(args):
-    print('Looking at species: '+args.varname)
+    log = logging.getLogger()
+    log.setLevel(logging.INFO)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
+    log.addHandler(handler)
+    log.info('Looking at species: {}'.format(args.varname))
     # set flags based on outtype
     if args.outtype=="tend":
         logconc = False
@@ -54,8 +60,8 @@ def main(args):
         # read full array of files
         filenames = glob.glob(args.path)
         megaf,megap,fvars,pvars = read_files(filenames,args.varname,tend,args.fraction,args.nbins)
-        print('Shape of megaf: ',megaf.shape)
-        print('Shape of megap: ',megap.shape)
+        log.info('Shape of megaf: {}'.format(megaf.shape))
+        log.info('Shape of megap: {}'.format(megap.shape))
         # normalize inputs & output
         idx = fvars.index('KPP_AIRDEN')
         if args.varname=='NOratio':
@@ -77,103 +83,107 @@ def main(args):
         valid = xgb.DMatrix(X_valid,label=Y_valid)
         # this takes forever!
         if args.save_svm == 1:
-            print('saving svm files...')
+            log.info('saving svm files...')
             dump_svmlight_file(X_train,Y_train.ravel(),SVMPATH+'/gcxgb_example_train.svm',zero_based=True)
             dump_svmlight_file(X_valid,Y_valid.ravel(),SVMPATH+'/gcxgb_example_valid.svm',zero_based=True)
 #---Train
 # train xgboost using input params
-    print('training xgb...')
+    log.info('training xgb...')
     sys.stdout.flush()
     bst,dt = run_xgb(args,train,valid,Y_train,Y_valid)
-    print('training done!')
-    print('training time: {0:.3f}'.format(dt)+'\n')
+    log.info('training done!')
+    label = 'training time (GPU)' if args.gpu==1 else 'training time (CPU)'
+    log.info(label+': {0:.3f}'.format(dt))
     sys.stdout.flush()
     # write booster file to binary
     ofile = args.boosterfile.replace('%v',args.varname).replace('%t',args.outtype)
     bst.save_model(ofile)
-    print('booster object written to '+ofile)
+    log.info('booster object written to {}'.format(ofile))
     return
 
 
 def get_svm(ifile):
     '''Read svm files'''
+    log = logging.getLogger(__name__)
     locfile = '/'.join([SVMPATH,ifile])
     urlfile = '/'.join([SVMURL,ifile])
     if not os.path.isfile(locfile):
-        print('getting file from '+urlfile)
+        log.info('getting file from '+urlfile)
         r = requests.get(urlfile)
         open(locfile, 'wb').write(r.content)
-    print('reading '+locfile) 
+    log.info('reading '+locfile) 
     dat = xgb.DMatrix(locfile)
     return dat 
 
 
 def read_files(filenames,ispec,tend,fraction,nbins):
-   '''
-   Read pkl files with chemistry model output.
-   '''
-   first = True
-   nfiles = len(filenames)
-   for filename in filenames:
-       print('Reading '+filename)
-       sys.stdout.flush()
-       [fvars, pvars, farr, parr] = joblib.load(filename)
-       # reduce output to species of interest
-       if ispec=='NOx' or ispec=='NOratio':
-           # get NO and NO2 in kg N
-           pidx1 = pvars.index('KPP_AFTER_CHEM_NO')
-           pidx2 = pvars.index('KPP_AFTER_CHEM_NO2')
-           ptmp1 = np.copy(parr[:,pidx1]) * (14./30.)
-           ptmp2 = np.copy(parr[:,pidx2]) * (14./46.)
-           # get NOx
-           if ispec=='NOx':
-               ptmp  = ptmp1 + ptmp2
-           if ispec=='NOratio':
-               ptmp  = ptmp1 / ( ptmp1 + ptmp2 )
-       else:
-           pidx = pvars.index('KPP_AFTER_CHEM_'+ispec)
-           ptmp = np.copy(parr[:,pidx])
-       if tend:
-           if ispec=='NOx':
-               fidx1 = fvars.index('KPP_BEFORE_CHEM_NO')
-               fidx2 = fvars.index('KPP_BEFORE_CHEM_NO2')
-               ftmp1 = np.copy(farr[:,fidx1]) * (14./30.)
-               ftmp2 = np.copy(farr[:,fidx2]) * (14./46.)
-               ftmp  = ftmp1 + ftmp2
-           else:
-               fidx = fvars.index('KPP_BEFORE_CHEM_'+ispec)
-               ftmp = farr[:,fidx]
-           ptmp = ( ptmp - ftmp ) / dt_chem
-       if first:
-           lens = farr.shape[0]
-           nrows_per_file = int(lens*fraction)
-           nrows_total    = nrows_per_file*nfiles
-           nrows_per_bin  = int(nrows_per_file/nbins)
-           megaf = np.zeros((nrows_total,farr.shape[1]),dtype='float32')
-           megap = np.zeros((nrows_total,1),dtype='float32')
-           first=False
-           i1 = 0
-       # get percentiles
-       ranges = [np.percentile(ptmp,int(i)) for i in range(0,101,int(100/nbins))]
-       for ibin in range(0,int(nbins)):
-           # get all indeces that are within this percentile
-           idxs = np.where( (ptmp >= ranges[ibin]) & (ptmp <= ranges[ibin+1]) )[0]
-           # randomly pick values
-           idx = np.random.choice(idxs,nrows_per_bin,replace=False)
-           # pass to master array
-           i0 = i1
-           i1 = i0 + nrows_per_bin
-           megaf[i0:i1,:] = farr[idx,:]
-           megap[i0:i1,0] = ptmp[idx]
-   # remove entries where NUMDEN is zero
-   idx = fvars.index('KPP_AIRDEN')
-   msk = np.where(megaf[:,idx]>0.0)[0]
-   megaf = megaf[msk,:]
-   megap = megap[msk,:]
-   return megaf,megap,fvars,pvars
-
+    '''
+    Read pkl files with chemistry model output.
+    '''
+    log = logging.getLogger(__name__)
+    first = True
+    nfiles = len(filenames)
+    for filename in filenames:
+        log.info('Reading '+filename)
+        sys.stdout.flush()
+        [fvars, pvars, farr, parr] = joblib.load(filename)
+        # reduce output to species of interest
+        if ispec=='NOx' or ispec=='NOratio':
+            # get NO and NO2 in kg N
+            pidx1 = pvars.index('KPP_AFTER_CHEM_NO')
+            pidx2 = pvars.index('KPP_AFTER_CHEM_NO2')
+            ptmp1 = np.copy(parr[:,pidx1]) * (14./30.)
+            ptmp2 = np.copy(parr[:,pidx2]) * (14./46.)
+            # get NOx
+            if ispec=='NOx':
+                ptmp  = ptmp1 + ptmp2
+            if ispec=='NOratio':
+                ptmp  = ptmp1 / ( ptmp1 + ptmp2 )
+        else:
+            pidx = pvars.index('KPP_AFTER_CHEM_'+ispec)
+            ptmp = np.copy(parr[:,pidx])
+        if tend:
+            if ispec=='NOx':
+                fidx1 = fvars.index('KPP_BEFORE_CHEM_NO')
+                fidx2 = fvars.index('KPP_BEFORE_CHEM_NO2')
+                ftmp1 = np.copy(farr[:,fidx1]) * (14./30.)
+                ftmp2 = np.copy(farr[:,fidx2]) * (14./46.)
+                ftmp  = ftmp1 + ftmp2
+            else:
+                fidx = fvars.index('KPP_BEFORE_CHEM_'+ispec)
+                ftmp = farr[:,fidx]
+            ptmp = ( ptmp - ftmp ) / dt_chem
+        if first:
+            lens = farr.shape[0]
+            nrows_per_file = int(lens*fraction)
+            nrows_total    = nrows_per_file*nfiles
+            nrows_per_bin  = int(nrows_per_file/nbins)
+            megaf = np.zeros((nrows_total,farr.shape[1]),dtype='float32')
+            megap = np.zeros((nrows_total,1),dtype='float32')
+            first=False
+            i1 = 0
+        # get percentiles
+        ranges = [np.percentile(ptmp,int(i)) for i in range(0,101,int(100/nbins))]
+        for ibin in range(0,int(nbins)):
+            # get all indeces that are within this percentile
+            idxs = np.where( (ptmp >= ranges[ibin]) & (ptmp <= ranges[ibin+1]) )[0]
+            # randomly pick values
+            idx = np.random.choice(idxs,nrows_per_bin,replace=False)
+            # pass to master array
+            i0 = i1
+            i1 = i0 + nrows_per_bin
+            megaf[i0:i1,:] = farr[idx,:]
+            megap[i0:i1,0] = ptmp[idx]
+    # remove entries where NUMDEN is zero
+    idx = fvars.index('KPP_AIRDEN')
+    msk = np.where(megaf[:,idx]>0.0)[0]
+    megaf = megaf[msk,:]
+    megap = megap[msk,:]
+    return megaf,megap,fvars,pvars
+ 
 
 def run_xgb(args,train,valid,Y_train,Y_valid):
+    log = logging.getLogger(__name__)
     # define XGBoost
     param = {
         'booster' : 'gbtree' ,
@@ -204,15 +214,13 @@ def run_xgb(args,train,valid,Y_train,Y_valid):
     ofile = args.scatterfile.replace('%v',args.varname).replace('%t',args.outtype)
     plt.tight_layout()
     plt.savefig(ofile)
-    print('scatter plot written to '+ofile)
+    log.info('scatter plot written to '+ofile)
     plt.close()
     return bst,dt
 
 
 def make_fig(args,ax,true,pred,title):
-    # convert to ppbv
-    #true = true * myrf.dt_chem * 1.0e9 * 28.96 / 48.0
-    #pred = pred * myrf.dt_chem * 1.0e9 * 28.96 / 48.0
+    log = logging.getLogger(__name__)
     # statistics
     R2    = r2_score(true,pred)
     nrmse = sqrt(mean_squared_error(true,pred))/np.std(true)
@@ -221,8 +229,6 @@ def make_fig(args,ax,true,pred,title):
     # scatter plot
     ax.hexbin(true,pred,cmap=plt.cm.gist_earth_r,bins='log')
     # 1:1 line
-    #minval = -3.0 
-    #maxval =  3.0
     minval = np.min((np.min(true),np.min(pred)))
     maxval = np.max((np.max(true),np.max(pred)))
     ax.set_xlim(minval,maxval)
