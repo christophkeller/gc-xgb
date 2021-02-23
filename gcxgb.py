@@ -75,12 +75,9 @@ def run_xgb(args,train,valid,Y_train,Y_valid):
         'booster' : 'gbtree' ,
     }
     num_round = 20
-    if args.gpu==1:
-        param['tree_method'] = 'gpu_hist'
-    else: 
-        param['tree_method'] = 'hist'
-        if args.nthread > 0:
-            param['nthread'] = args.nthread  
+    param['tree_method'] = 'gpu_hist' if args.gpu==1 else 'hist'
+    if args.gpu==0 and args.nthread > 0:
+        param['nthread'] = args.nthread  
     # train XGBoost 
     start_time = time.perf_counter()
     bst = xgb.train(param,train,num_round)
